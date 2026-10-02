@@ -488,6 +488,32 @@ Contributions are welcome!
 
 ---
 
+## Contributors
+
+Thanks to everyone who has contributed code, testing and ideas.
+
+<a href="https://github.com/rayl15/OpenVision/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=rayl15/OpenVision" alt="Contributors" />
+</a>
+
+Field testers and issue reporters make this project work on hardware the maintainers don't own — see the
+[closed issues](https://github.com/rayl15/OpenVision/issues?q=is%3Aissue+is%3Aclosed) for the people who
+debugged glasses, gateways and models with us.
+
+---
+
+## Star History
+
+<a href="https://star-history.com/#rayl15/OpenVision&Date">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=rayl15/OpenVision&type=Date&theme=dark" />
+    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=rayl15/OpenVision&type=Date" />
+    <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=rayl15/OpenVision&type=Date" />
+  </picture>
+</a>
+
+---
+
 ## License
 
 MIT License - see [LICENSE](LICENSE) for details.
@@ -502,7 +528,8 @@ MIT License - see [LICENSE](LICENSE) for details.
 - [Apple Foundation Models](https://developer.apple.com/documentation/foundationmodels) - On-device Apple Intelligence
 - [Google Gemini](https://ai.google.dev) - Live audio/video AI
 - [OpenClaw](https://github.com/openclaw/openclaw) - AI assistant framework
-- [OpenAI](https://platform.openai.com) - GPT-4o text + vision
+- [OpenAI](https://platform.openai.com) - GPT-4o text + vision, and `gpt-4o-mini-tts` cloud voice
+- [xAI](https://docs.x.ai) - Grok text + vision, and Grok cloud voice
 - [Tavily](https://tavily.com) - Live web search built for AI assistants
 - [DuckDuckGo](https://duckduckgo.com) - Keyless web-search fallback
 
