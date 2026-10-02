@@ -228,7 +228,8 @@ Full instructions, CLI build commands, and troubleshooting: **[SETUP.md](SETUP.m
 
 > This signs in the way the Codex CLI does and uses the backend the CLI talks to. It's not an
 > official OpenAI API, so it can change or stop working without notice. Tokens are stored in the
-> iOS Keychain.
+> iOS Keychain. Signing in on the phone appears to end an existing Codex CLI session for the same
+> account (and vice versa), so if you use both, expect to sign in again on the other device.
 
 **For on-device vision (SmolVLM2):**
 1. Settings → AI Backend → **Local (MLX)**
