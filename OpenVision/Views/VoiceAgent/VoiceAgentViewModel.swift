@@ -69,6 +69,11 @@ final class VoiceAgentViewModel: ObservableObject {
     /// History: true after a user command was recorded, until its reply is recorded. Keeps
     /// system utterances ("Live video mode active", error prompts) out of the History tab.
     private var historyAwaitingReply = false
+    /// A question put to the user mid-turn (a Hermes approval or clarifying question). The next
+    /// captured utterance answers it instead of starting a new command.
+    private var pendingAnswer: (id: UUID, continuation: CheckedContinuation<String?, Never>)?
+    /// Starts the neural voice reading the open question; cancelled with the question.
+    private var questionPrompt: Task<Void, Never>?
     /// History (live modes): last streamed AI turn already recorded, to dedupe turn-complete events.
     private var historyLastLiveReply = ""
 
@@ -213,6 +218,7 @@ final class VoiceAgentViewModel: ObservableObject {
             // session, so the post-reply audio rebuild never ran.)
             if isSessionActive && agentState == .listening {
                 print("[VoiceAgent] Voice service idle, stopping session")
+                cancelPendingAnswer()
                 isSessionActive = false
                 agentState = .idle
                 // Disconnect AI backend
@@ -222,7 +228,7 @@ final class VoiceAgentViewModel: ObservableObject {
                         await OpenClawService.shared.disconnect()
                     case .geminiLive:
                         await GeminiLiveService.shared.disconnect()
-                    case .openAI, .grok:
+                    case .openAI, .grok, .hermes:
                         break   // stateless HTTP — nothing to disconnect
                     case .appleFoundation:
                         break   // OS-managed — nothing to disconnect
@@ -301,6 +307,10 @@ final class VoiceAgentViewModel: ObservableObject {
                 case .grok:
                     try await GrokService.shared.connect()
                     // Stateless HTTP — photos are captured on-demand like OpenAI.
+
+                case .hermes:
+                    try await HermesService.shared.connect()
+                    // Stateless HTTP to the user's Hermes server — photos on demand like OpenAI.
 
                 case .appleFoundation:
                     try await AppleFoundationService.shared.connect()
@@ -395,6 +405,7 @@ final class VoiceAgentViewModel: ObservableObject {
     }
 
     func stopSession() {
+        cancelPendingAnswer()
         // If in live video mode, stop it first
         if isLiveVideoMode {
             Task {
@@ -410,6 +421,9 @@ final class VoiceAgentViewModel: ObservableObject {
                 await GeminiLiveService.shared.disconnect()
             case .openAI, .grok:
                 break   // stateless HTTP — nothing to disconnect
+            case .hermes:
+                // Stop the gateway turn too, or the next request finds it still running.
+                await HermesGatewayClient.shared.interrupt()   // no-op in API-key mode
             case .appleFoundation:
                 break   // OS-managed — nothing to disconnect
             case .localGemma:
@@ -458,6 +472,7 @@ final class VoiceAgentViewModel: ObservableObject {
         // to be recorded as failed by the next beginTurn.
         MetricsCollector.shared.markInterrupted()
         MetricsCollector.shared.markSpokeDone()
+        cancelPendingAnswer()
         commandTurnActive = false
         ttsService.stop()
         NeuralSpeech.stopAll()
@@ -469,6 +484,7 @@ final class VoiceAgentViewModel: ObservableObject {
             case .openClaw: await OpenClawService.shared.interrupt()
             case .geminiLive: await GeminiLiveService.shared.interrupt()
             case .openAI, .grok: break   // single request/response — nothing to interrupt
+            case .hermes: await HermesGatewayClient.shared.interrupt()   // no-op in API-key mode
             case .appleFoundation: AppleFoundationService.shared.interrupt()
             case .localGemma: GemmaLocalService.shared.interrupt()
             }
@@ -586,6 +602,13 @@ final class VoiceAgentViewModel: ObservableObject {
             self?.performFullStop()
         }
 
+        HermesGatewayClient.shared.cancelQuestion = { [weak self] in
+            self?.cancelPendingAnswer()
+        }
+        HermesGatewayClient.shared.askUser = { [weak self] prompt in
+            await self?.askUser(prompt)
+        }
+
         // Command captured
         voiceCommandService.onCommandCaptured = { [weak self] (command: String) in
             guard let self else { return }
@@ -595,6 +618,18 @@ final class VoiceAgentViewModel: ObservableObject {
             // This prevents processing stale commands after session ends
             guard self.isSessionActive else {
                 print("[VoiceAgent] Ignoring command - session not active")
+                return
+            }
+
+            // An answer to a question the agent asked mid-turn, not a new command.
+            if self.pendingAnswer != nil, self.settingsManager.settings.aiBackend != .hermes {
+                self.cancelPendingAnswer()   // backend switched mid-question: this is a new command
+            }
+            if let pending = self.pendingAnswer {
+                self.pendingAnswer = nil
+                self.userTranscript = command
+                self.agentState = .thinking   // Hermes carries on with the answer
+                pending.continuation.resume(returning: command)
                 return
             }
 
@@ -638,6 +673,13 @@ final class VoiceAgentViewModel: ObservableObject {
             print("[VoiceAgent] Barge-in detected")
             // Interruption rate is a satisfaction signal: users talk over an agent that is slow,
             // wrong, or too verbose. Recorded on the turn being interrupted.
+            // Talking over a question Hermes asked is answering it early: stop reading it out but
+            // keep the question open (and the turn running) for what they say.
+            if self.pendingAnswer != nil {
+                self.ttsService.stop()
+                NeuralSpeech.stopAll()
+                return
+            }
             MetricsCollector.shared.markInterrupted()
 
             // Stop TTS immediately
@@ -653,6 +695,8 @@ final class VoiceAgentViewModel: ObservableObject {
                     await GeminiLiveService.shared.interrupt()
                 case .openAI, .grok:
                     break   // single request/response — nothing to interrupt
+                case .hermes:
+                    await HermesGatewayClient.shared.interrupt()   // no-op in API-key mode
                 case .appleFoundation:
                     AppleFoundationService.shared.interrupt()
                 case .localGemma:
@@ -668,6 +712,13 @@ final class VoiceAgentViewModel: ObservableObject {
             // re-arms conversation mode so the user can keep asking until they say "stop video".
             if self.isLiveVideoMode {
                 print("[VoiceAgent] Conversation timeout during live video — staying live")
+                return
+            }
+            if self.pendingAnswer != nil {
+                // Silence answers a Hermes question with no, but its turn and the session go on.
+                print("[VoiceAgent] Conversation timeout during a Hermes question - answering no")
+                self.cancelPendingAnswer()
+                self.agentState = .thinking
                 return
             }
             print("[VoiceAgent] Conversation timeout - returning to idle")
@@ -969,9 +1020,11 @@ final class VoiceAgentViewModel: ObservableObject {
             } else {
                 try await backend.sendMessage(command, imageData: nil)
             }
-            // OpenAI and Grok are plain request/response with no session to keep "thinking" alive —
+            // OpenAI, Grok and Hermes are plain request/response with no session to keep "thinking" alive —
             // restore the listening state inline. The others restore via their callbacks.
-            if backend.backendType == .openAI || backend.backendType == .grok {
+            // (Not while the reply is playing: speech ending restores it.)
+            if [.openAI, .grok, .hermes].contains(backend.backendType),
+               !ttsService.isSpeaking, !NeuralSpeech.isAnySpeaking {
                 agentState = isSessionActive ? .listening : .idle
             }
         } catch {
@@ -1638,6 +1691,11 @@ final class VoiceAgentViewModel: ObservableObject {
             while s.hasPrefix(prefix) { s = String(s.dropFirst(prefix.count)) }
         }
         s = s.trimmingCharacters(in: CharacterSet(charactersIn: " ,.?!"))
+        // Hermes is a full agent: the coaching below is for small vision models and would just
+        // show up in the user's Hermes chat, so send the user's own question.
+        if settingsManager.settings.aiBackend == .hermes {
+            return s.count < 3 ? "What is this?" : s.prefix(1).uppercased() + s.dropFirst()
+        }
         if s.count < 3 {
             return "What is the main object in this image? Name it specifically and describe its key visible details in 2–3 sentences."
         }
@@ -2110,6 +2168,47 @@ final class VoiceAgentViewModel: ObservableObject {
         } else {
             ttsService.speak(text)
         }
+    }
+
+    // MARK: - Mid-turn questions
+
+    /// Put a question to the user while a turn is still running (Hermes approvals and clarifying
+    /// questions): speak it, then return the next thing they say, or nil after a minute. Spoken
+    /// directly rather than through speakResponse, so it isn't recorded as the turn's answer.
+    func askUser(_ prompt: String) async -> String? {
+        cancelPendingAnswer()
+        if let neuralTTS {
+            questionPrompt = Task {
+                guard !Task.isCancelled else { return }
+                await neuralTTS.speak(prompt)
+            }
+        } else {
+            ttsService.speak(prompt)
+        }
+        let id = UUID()
+        return await withCheckedContinuation { continuation in
+            pendingAnswer = (id, continuation)
+            Task {
+                try? await Task.sleep(for: .seconds(60))
+                if let pending = self.pendingAnswer, pending.id == id {
+                    self.pendingAnswer = nil
+                    pending.continuation.resume(returning: nil)
+                }
+            }
+        }
+    }
+
+    /// Drop the open question with no answer (a stop, a barge-in, or Hermes withdrew it), so a
+    /// later command can't answer it: to an approval, no answer is a no.
+    private func cancelPendingAnswer() {
+        guard let pending = pendingAnswer else { return }
+        pendingAnswer = nil
+        // Stop reading the question out, too: it no longer takes an answer.
+        questionPrompt?.cancel()
+        questionPrompt = nil
+        ttsService.stop()
+        NeuralSpeech.stopAll()
+        pending.continuation.resume(returning: nil)
     }
 
     // MARK: - History
