@@ -184,13 +184,19 @@ final class HermesService: ObservableObject {
     }
 
     /// The address with a scheme, for one typed without (`myhost.ts.net`, `100.88.1.2:8642`):
-    /// http for a local or Tailscale IP (servers there rarely have a certificate), https otherwise.
+    /// http for a local host or Tailscale IP (servers there rarely have a certificate), for a
+    /// dot-less name (`nuc`, almost always a LAN machine), and for a `*.ts.net` name with a port
+    /// (`tailscale serve` answers https on 443, so a port means the server itself); https
+    /// otherwise. Only a guess: a dot-less name could also resolve through a search domain, so
+    /// it still gets the plain-http warning and can't sign in over http.
     nonisolated static func withScheme(_ address: String) -> String {
         let text = address.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, !text.contains("://") else { return text }
         let hostAndPort = text.split(separator: "/", maxSplits: 1).first.map(String.init) ?? text
         let host = hostAndPort.split(separator: ":").first.map(String.init) ?? hostAndPort
-        return (isLocalHost(host) ? "http://" : "https://") + text
+        let tailnetPort = host.lowercased().hasSuffix(".ts.net") && hostAndPort.contains(":")
+        let singleLabel = !host.contains(".") && !host.contains(":")
+        return (isLocalHost(host) || singleLabel || tailnetPort ? "http://" : "https://") + text
     }
 
     private static func authorize(_ request: inout URLRequest, key: String, sessionKey: String?) {
