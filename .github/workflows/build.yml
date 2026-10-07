@@ -14,7 +14,11 @@ jobs:
 
       - name: Install Tools
         run: brew install xcodegen
-
+      - name: Create Config.xcconfig
+        run: |
+          cp Config.xcconfig.example Config.xcconfig
+          echo "Created Config.xcconfig"
+          ls -la Config.xcconfig
       - name: Generate Xcode Project
         run: xcodegen generate
 
