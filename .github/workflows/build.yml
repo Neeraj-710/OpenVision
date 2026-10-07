@@ -24,7 +24,9 @@ jobs:
             -project OpenVision.xcodeproj \
             -scheme OpenVision \
             -configuration Release \
+            -sdk iphoneos \
             -archivePath $PWD/build/OpenVision.xcarchive \
+            -skipPackagePluginValidation \
             CODE_SIGNING_ALLOWED=NO
 
       - name: Package IPA
