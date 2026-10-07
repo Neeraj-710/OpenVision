@@ -1,0 +1,40 @@
+name: Build iOS IPA
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Xcode
+        run: sudo xcode-select -s /Applications/Xcode.app
+
+      - name: Install Tools
+        run: brew install xcodegen
+
+      - name: Generate Xcode Project
+        run: xcodegen generate
+
+      - name: Build Archive
+        run: |
+          xcodebuild archive \
+            -project OpenVision.xcodeproj \
+            -scheme OpenVision \
+            -configuration Release \
+            -archivePath $PWD/build/OpenVision.xcarchive \
+            CODE_SIGNING_ALLOWED=NO
+
+      - name: Package IPA
+        run: |
+          mkdir -p Payload
+          cp -r build/OpenVision.xcarchive/Products/Applications/OpenVision.app Payload/
+          zip -r OpenVision.ipa Payload
+
+      - name: Upload Finished IPA File
+        uses: actions/upload-artifact@v4
+        with:
+          name: OpenVision-App
+          path: OpenVision.ipa
